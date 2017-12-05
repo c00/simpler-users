@@ -1,0 +1,1 @@
+-- Create script for the basic user objects
