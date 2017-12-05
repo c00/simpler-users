@@ -1,27 +1,21 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: coo
- * Date: 5-12-17
- * Time: 18:44
- */
 
 namespace c00\oauth;
-
 
 class Google implements OauthService
 {
 
     public $result;
-
     public $clientId;
-
+    public $clientSecret;
 
     public function __construct($settings = null)
     {
-
+        if (is_array($settings)){
+            $this->clientId = $settings['clientId'] ?? null;
+            $this->clientSecret = $settings['clientSecret'] ?? null;
+        }
     }
-
 
 
     public function verify($data): bool
@@ -46,14 +40,19 @@ class Google implements OauthService
         return $this->result;
     }
 
-    public function getOauthId()
+    public function getOauthId() : string
     {
         throw new \Exception("not implemented");
     }
 
-    public function getEmail()
+    public function getEmail() : string
     {
         throw new \Exception("not implemented");
+    }
+
+    public function getServiceName(): string
+    {
+        return OauthService::GOOGLE;
     }
 
 

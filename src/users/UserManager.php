@@ -1,29 +1,30 @@
 <?php
 
-namespace c00\wannaTrain;
+namespace c00\users;
 
 use c00\common\AbstractDatabase;
 use c00\common\CovleDate;
-use c00\log\Log;
 use c00\oauth\Google;
 use c00\oauth\OauthService;
-use c00\QueryBuilder\components\WhereGroup;
 use c00\QueryBuilder\Qry;
-use c00\social\GoogleOauthResponse;
-use c00\common\Helper as H;
-use c00\users\LoginError;
-use c00\users\Session;
-use c00\users\User;
+use Symfony\Component\HttpFoundation\Request;
 
 class UserManager
 {
     const TABLE_USER = 'user';
     const TABLE_SESSION = 'session';
 
+    const SESSION_HEADER = 'x-auth';
+    const SESSION_PARAM = 't';
+
     protected $loggedIn = false;
     /** @var AbstractDatabase */
     protected $db;
     protected $loginError;
+
+    /** @var OauthService[] */
+    protected $oauthServices = [];
+
 
     /** @var User */
     public $user = null;
@@ -33,15 +34,37 @@ class UserManager
         $this->db = $db;
     }
 
+    public function addOauthService(OauthService $s) {
+        $this->oauthServices[$s->getServiceName()] = $s;
+    }
+
     public function getLoginError() {
         return $this->loginError;
     }
 
+    /**
+     * @return User|null
+     */
     public function getLoggedInUser()
     {
-        if (!$this->loggedIn || !$this->user){
-            throw new \Exception("Not logged in");
+        if ($this->user && $this->loggedIn) return $this->user;
+
+        //Try to get user token from headers and params.
+        return $this->tryGetUserFromRequest();
+    }
+
+    private function tryGetUserFromRequest() {
+        $r = Request::createFromGlobals();
+
+        //Get header
+        $token = $r->headers->get(self::SESSION_HEADER) ?? $r->query->get(self::SESSION_PARAM);
+
+        if (!$token) {
+            $this->loggedIn = false;
+            return null;
         }
+
+        $this->user = $this->getUserBySession($token);
 
         return $this->user;
     }
@@ -69,7 +92,7 @@ class UserManager
         }
 
         $q = Qry::insert(self::TABLE_USER, $u);
-        $u->id = $this->db->insertRow($q);
+        $u->id = (int) $this->db->insertRow($q);
 
         $this->user = $u;
 
@@ -234,23 +257,11 @@ class UserManager
 
     }
 
-    public function deleteSession(string $token) {
-        $q = Qry::delete(self::TABLE_SESSION)->where('token', '=', $token);
-
-        $this->db->deleteRows($q);
-    }
-
-    public function deleteSessions($userId) {
-        $q = Qry::delete(self::TABLE_SESSION)->where('userId', '=', $userId);
-
-        $this->db->deleteRows($q);
-    }
-
     public function checkSession(string $token) : bool
     {
         $this->user = $this->getUserBySession($token);
 
-        if(!$this->user) return false;
+        if(!$this->user || !$this->user->active) return false;
 
         $this->touchSession($this->user);
 
@@ -319,26 +330,29 @@ class UserManager
     }
 
     //region Social
-    public function processGoogleLogin($data, $allowCreate = false) : bool
+    public function processOauthLogin(string $serviceName, $data, bool $allowCreate = false) : bool
     {
-        $service = new Google();
+        $service = $this->oauthServices[$serviceName] ?? null;
+        if (!$service)  throw new \Exception("Service $serviceName unknown.");
+
+
+        /* Scenarios:
+        1. oAuthId exists, that's our user.
+        2. oAuthId doesn't exist, allowCreate = true, create new.
+        3. oAuthId doesn't exist, allowCreate = false, reject.
+        */
+
         if (!$service->verify($data)) {
-            $this->loginError = LoginError::GOOGLE_VERIFICATION_FAILED;
+            $this->loginError = LoginError::OAUTH_VERIFICATION_FAILED;
             return false;
         }
 
-        /* Scenarios:
-        1. Google userId exists, that's our user.
-        2. Google userId doesn't exist, allowCreate = true, create new.
-        3. Google userId doesn't exist, allowCreate = false, reject.
-        */
-
-        $user = $this->getUserBySocialUserId($service->getOauthId(), OauthService::GOOGLE);
+        $user = $this->getUserBySocialUserId($service->getOauthId(), $serviceName);
         $this->user= $user;
 
         if (!$user && $allowCreate) {
             //Scenario 2: Create user
-            $user = User::newSocialUser($service->getEmail(), OauthService::GOOGLE, $service->getOauthId());
+            $user = User::newSocialUser($service->getEmail(), $serviceName, $service->getOauthId());
             $this->addUser($user);
             $this->user = $user;
         } else if (!$user && !$allowCreate) {

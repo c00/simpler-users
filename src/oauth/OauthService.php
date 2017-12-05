@@ -15,6 +15,8 @@ interface OauthService
     //Add others if you feel so inclined...
     //const FACEBOOK = 'facebook';
 
+    public function getServiceName() : string;
+
     public function verify($data) : bool;
 
     /**
