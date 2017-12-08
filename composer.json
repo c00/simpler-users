@@ -2,6 +2,8 @@
     "name": "c00/simple-users",
     "description": "A starting point for integrating a user system.",
     "type": "library",
+    "license": "MIT",
+    "minimum-stability": "stable",
     "authors": [
         {
             "name": "Co van Leeuwen",
