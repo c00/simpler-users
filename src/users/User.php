@@ -31,6 +31,8 @@ class User extends AbstractDatabaseObject
         'active' => 'bool'
     ];
 
+    protected $_ignore = ['session'];
+
     public function setPassword(string $password){
         if (strlen($password) > 72) throw new \Exception("Password too long!");
 

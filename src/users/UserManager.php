@@ -35,6 +35,11 @@ class UserManager
     }
 
     public function addOauthService(OauthService $s) {
+
+        if (isset($this->oauthServices[$s->getServiceName()])) {
+            throw new \Exception("Oauth Service '{$s->getServiceName()}' already added!");
+        }
+
         $this->oauthServices[$s->getServiceName()] = $s;
     }
 
@@ -44,13 +49,18 @@ class UserManager
 
     /**
      * @return User|null
+     * @throws \Exception when not logged in
      */
     public function getLoggedInUser()
     {
         if ($this->user && $this->loggedIn) return $this->user;
 
         //Try to get user token from headers and params.
-        return $this->tryGetUserFromRequest();
+        if (!$this->tryGetUserFromRequest()) {
+            throw new \Exception("Not logged in.");
+        }
+
+        return $this->user;
     }
 
     private function tryGetUserFromRequest() {
@@ -330,41 +340,71 @@ class UserManager
     }
 
     //region Social
-    public function processOauthLogin(string $serviceName, $data, bool $allowCreate = false) : bool
+
+    /**
+     * @param string $serviceName The name of the oAuth Service, e.g. 'google'
+     * @param $data mixed The data the service requires to verify.
+     * @param bool $allowCreate Create the user if it doesn't exist?
+     * @param bool $allowExpand Add oAuth info to the user if the email address already exists?
+     * @return bool true on success.
+     * @throws \Exception
+     */
+    public function processOauthLogin(string $serviceName, $data, bool $allowCreate = false, bool $allowExpand = false) : bool
     {
         $service = $this->oauthServices[$serviceName] ?? null;
         if (!$service)  throw new \Exception("Service $serviceName unknown.");
-
-
-        /* Scenarios:
-        1. oAuthId exists, that's our user.
-        2. oAuthId doesn't exist, allowCreate = true, create new.
-        3. oAuthId doesn't exist, allowCreate = false, reject.
-        */
 
         if (!$service->verify($data)) {
             $this->loginError = LoginError::OAUTH_VERIFICATION_FAILED;
             return false;
         }
 
-        $user = $this->getUserBySocialUserId($service->getOauthId(), $serviceName);
-        $this->user= $user;
+        if (!$this->emailExists($service->getEmail())) {
+            //Email address doesn't exist yet.
 
-        if (!$user && $allowCreate) {
-            //Scenario 2: Create user
-            $user = User::newSocialUser($service->getEmail(), $serviceName, $service->getOauthId());
-            $this->addUser($user);
-            $this->user = $user;
-        } else if (!$user && !$allowCreate) {
-            //scenario 3 reject
-            $this->loginError = LoginError::OAUTH_ID_UNKNOWN;
+            if ($allowCreate) {
+                //Create user
+                $user = User::newSocialUser($service->getEmail(), $serviceName, $service->getOauthId());
+                $this->addUser($user);
+                $this->user = $user;
+
+
+            } else {
+                //Don't create user.
+                $this->loginError = LoginError::EMAIL_UNKNOWN;
+                return false;
+            }
+        } else {
+            //Email address is known.
+            $user = $this->getUserByEmail($service->getEmail());
+            $this->user= $user;
+
+            if ($user->oauthId == $service->getOauthId() && $user->oauthService == $service->getServiceName()) {
+                //Existing user. Login.
+
+            } else if ($allowExpand && !$user->oauthId) {
+                //Expand user
+                $user->oauthId = $service->getOauthId();
+                $user->oauthService = $service->getServiceName();
+                $this->updateUser($user);
+
+            } else {
+                //Some info isn't matching up.
+                $this->loginError = LoginError::OAUTH_ID_UNKNOWN;
+                return false;
+            }
+        }
+
+        //All good, do some final checks
+        if (!$this->user->active) {
+            $this->loginError = LoginError::USER_INACTIVE;
             return false;
         }
 
-        //Everything is good! Set up the session
-        $this->createNewSession($this->user);
 
+        $this->createNewSession($this->user);
         return true;
+
     }
 
     /**

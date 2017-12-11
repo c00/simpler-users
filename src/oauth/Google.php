@@ -2,9 +2,12 @@
 
 namespace c00\oauth;
 
+use c00\users\User;
+
 class Google implements OauthService
 {
-
+    /** @var  GoogleOauthResponse */
+    private $data;
     public $result;
     public $clientId;
     public $clientSecret;
@@ -20,6 +23,7 @@ class Google implements OauthService
 
     public function verify($data): bool
     {
+        $this->data = $data;
 
         $clientId = $this->clientId;
 
@@ -35,19 +39,25 @@ class Google implements OauthService
         return true;
     }
 
-    public function getResult()
+    public function getUser() : User
     {
-        return $this->result;
+        if (!$this->data) throw new \Exception("No Google Response Data");
+
+        $u = User::newSocialUser($this->data->email, OauthService::GOOGLE, $this->data->userId);
+
+        return $u;
     }
 
     public function getOauthId() : string
     {
-        throw new \Exception("not implemented");
+        if (!$this->data) throw new \Exception("No Google Response Data");
+        return $this->data->userId;
     }
 
     public function getEmail() : string
     {
-        throw new \Exception("not implemented");
+        if (!$this->data) throw new \Exception("No Google Response Data");
+        return $this->data->email;
     }
 
     public function getServiceName(): string

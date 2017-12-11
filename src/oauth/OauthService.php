@@ -9,6 +9,8 @@
 namespace c00\oauth;
 
 
+use c00\users\User;
+
 interface OauthService
 {
     const GOOGLE = 'google';
@@ -20,9 +22,9 @@ interface OauthService
     public function verify($data) : bool;
 
     /**
-     * @return mixed
+     * @return User
      */
-    public function getResult();
+    public function getUser() : User;
 
     /**
      * @return string
