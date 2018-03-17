@@ -17,6 +17,9 @@ class Google implements OauthService
         if (is_array($settings)){
             $this->clientId = $settings['clientId'] ?? null;
             $this->clientSecret = $settings['clientSecret'] ?? null;
+        } else if (is_object($settings)){
+            $this->clientId = $settings->clientId ?? null;
+            $this->clientSecret = $settings->clientSecret ?? null;
         }
     }
 

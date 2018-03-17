@@ -273,6 +273,8 @@ class UserManager
 
         if(!$this->user || !$this->user->active) return false;
 
+        $this->loggedIn = true;
+
         $this->touchSession($this->user);
 
         return true;
