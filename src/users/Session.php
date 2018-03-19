@@ -7,6 +7,7 @@ use c00\common\CovleDate;
 
 class Session extends AbstractDatabaseObject
 {
+	/** @deprecated  */
     const EXPIRATION_DAYS = 30;
 
     public $id;
@@ -32,12 +33,12 @@ class Session extends AbstractDatabaseObject
         $this->token = bin2hex(random_bytes(16));
     }
 
-    public static function newSession(User &$user) : Session
+    public static function newSession(User &$user, $daysValid) : Session
     {
         $s = new Session();
         $s->created = CovleDate::now();
         $s->lastAccess = CovleDate::now();
-        $s->expires = CovleDate::now()->addDays(self::EXPIRATION_DAYS);
+        $s->expires = CovleDate::now()->addDays($daysValid);
         $s->generateToken();
 
         $s->userId = $user->id;

@@ -192,8 +192,7 @@ class UserManagerTest extends \PHPUnit_Framework_TestCase
         $email = bin2hex(random_bytes(4)) . '@covle.com';
         $password = bin2hex(random_bytes(16));
 
-        $u = User::newUser($email, $password);
-        $this->um->addUser($u);
+        $u = $this->um->addNewUser($email, $password);
 
         $this->users[$email] = $u;
         $this->passwords[$email] = $password;

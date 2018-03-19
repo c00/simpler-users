@@ -17,9 +17,13 @@ class UserManager
     const SESSION_HEADER = 'x-auth';
     const SESSION_PARAM = 't';
 
+    /** @var UserManagerSettings */
+    protected $settings;
+
     protected $loggedIn = false;
     /** @var AbstractDatabase */
     protected $db;
+    /** @var string|null */
     protected $loginError;
 
     /** @var OauthService[] */
@@ -29,40 +33,60 @@ class UserManager
     /** @var User */
     public $user = null;
 
-    public function __construct($db = null)
+    public function __construct($db = null, $settings = null)
     {
         $this->db = $db;
+
+        if (!$settings) {
+        	$settings = new UserManagerSettings();
+        	$settings->load();
+        }
+        $this->settings = $settings;
     }
 
+
+	/**
+	 *
+	 * @param OauthService $s
+	 *
+	 * @throws SimpleUsersException
+	 */
     public function addOauthService(OauthService $s) {
 
         if (isset($this->oauthServices[$s->getServiceName()])) {
-            throw new \Exception("Oauth Service '{$s->getServiceName()}' already added!");
+            throw SimpleUsersException::new("Oauth Service '{$s->getServiceName()}' already added!");
         }
 
         $this->oauthServices[$s->getServiceName()] = $s;
     }
 
-    public function getLoginError() {
+	public function getLoginError() {
         return $this->loginError;
     }
 
-    /**
-     * @return User|null
-     * @throws \Exception when not logged in
-     */
+	/**
+	 * @return User
+	 * @throws SimpleUsersException
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function getLoggedInUser()
     {
         if ($this->user && $this->loggedIn) return $this->user;
 
         //Try to get user token from headers and params.
         if (!$this->tryGetUserFromRequest()) {
-            throw new \Exception("Not logged in.");
+            throw SimpleUsersException::new("Not logged in.");
         }
 
         return $this->user;
     }
 
+	/**
+	 * @return User|null
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     private function tryGetUserFromRequest() {
         $r = Request::createFromGlobals();
 
@@ -93,12 +117,21 @@ class UserManager
         return $this->db->rowExists($q);
     }
 
-    public function addUser(User &$u) : User
+	/**
+	 * @param User $u
+	 * @param $password string Set the users password (includes password strength check
+	 *
+	 * @return User
+	 * @throws SimpleUsersException
+	 * @throws \Exception
+	 */
+    public function addUser(User &$u, $password = null) : User
     {
         $u->email = strtolower($u->email);
+        if ($password) $u->setPassword($password, $this->settings->minPasswordStrength);
 
         if ($this->emailExists($u->email)){
-            throw new \Exception("Email {$u->email} already exists!");
+	        throw SimpleUsersException::new("Email {$u->email} already exists!");
         }
 
         $q = Qry::insert(self::TABLE_USER, $u);
@@ -109,6 +142,33 @@ class UserManager
         return $this->user;
     }
 
+	/**
+	 * @param string $email
+	 * @param string $password
+	 *
+	 * @return User
+	 * @throws SimpleUsersException
+	 * @throws \Exception
+	 */
+	public function addNewUser(string $email, string $password) : User
+	{
+		$u = new User;
+		$u->email = $email;
+		$u->setPassword($password, $this->settings->minPasswordStrength);
+		$u->created = CovleDate::now();
+		$u->lastLogin = CovleDate::now();
+		$u->active = true;
+
+		return $this->addUser($u);
+	}
+
+	/**
+	 * @param User $u
+	 *
+	 * @return bool
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function updateUser(User $u) : bool
     {
         $q = Qry::update(self::TABLE_USER, $u)
@@ -117,9 +177,11 @@ class UserManager
         return $this->db->updateRow($q);
     }
 
-    /**
-     * @param $ids array|int User Id(s) to purge
-     */
+	/**
+	 * @param $ids array|string
+	 *
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function purgeUsers($ids) {
         if (!is_array($ids)) $ids = [$ids];
 
@@ -132,6 +194,11 @@ class UserManager
         $this->db->commitTransaction();
     }
 
+	/**
+	 * @param $id
+	 *
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     protected function purgeUser($id)
     {
         //Session
@@ -145,14 +212,18 @@ class UserManager
         );
     }
 
-    /**
-     * Updates a session to be valid for another Session::EXPIRATION_DAYS
-     * @param User $user
-     * @return bool
-     */
+
+	/**
+	 * Updates a session to be valid for another Session::EXPIRATION_DAYS
+	 * @param User $user
+	 * @return bool
+	 *
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function touchSession(User &$user){
         $user->session->lastAccess = CovleDate::now();
-        $user->session->expires = CovleDate::now()->addDays(Session::EXPIRATION_DAYS);
+        $user->session->expires = CovleDate::now()->addDays($this->settings->sessionDaysValid);
         $q = Qry::update(self::TABLE_SESSION, $user->session)
             ->where('id', '=', $user->session->id);
 
@@ -161,10 +232,13 @@ class UserManager
         return true;
     }
 
-    /**
-     * @param $token
-     * @return User|null
-     */
+	/**
+	 * @param $token
+	 *
+	 * @return User|null
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     private function getUserBySession($token)
     {
         $now = CovleDate::now()->toSeconds();
@@ -186,35 +260,53 @@ class UserManager
         return $user;
     }
 
+	/**
+	 * @param int $id
+	 *
+	 * @return User
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function getUserById(int $id) : User
     {
         $q = Qry::select()
             ->from(self::TABLE_USER)
             ->where('id', '=', $id)
-            ->asClass(User::class);
+            ->asClass($this->settings->userClass);
 
         return $this->db->getRow($q);
     }
 
+
+	/**
+	 * @param string $email
+	 *
+	 * @return User
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function getUserByEmail(string $email) : User
     {
         $q = Qry::select()
             ->from(self::TABLE_USER)
             ->where('email', '=', $email)
-            ->asClass(User::class);
+            ->asClass($this->settings->userClass);
 
         return $this->db->getRow($q);
     }
 
-    /**
-     * @param bool $toShowable
-     * @return User[]|array
-     */
+	/**
+	 * @param bool $toShowable
+	 *
+	 * @return array|User[]
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function getUsers($toShowable = false) : array
     {
         $q = Qry::select()
             ->from(self::TABLE_USER)
-            ->asClass(User::class);
+            ->asClass($this->settings->userClass);
 
         /** @var User[] $users */
         $users =  $this->db->getRows($q, $toShowable);
@@ -222,6 +314,13 @@ class UserManager
         return $users;
     }
 
+	/**
+	 * @param string $token
+	 *
+	 * @return Session
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     private function getSession(string $token): Session
     {
         $q = Qry::select()
@@ -232,6 +331,12 @@ class UserManager
         return $this->db->getrow($q);
     }
 
+	/**
+	 * @param string $token
+	 *
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function expireSession(string $token){
         $s = $this->getSession($token);
         $s->expires = CovleDate::now()->addSeconds(-1);
@@ -240,10 +345,13 @@ class UserManager
         $this->db->updateRow($q);
     }
 
-    /**
-     * @param $userId
-     * @return Session[]
-     */
+	/**
+	 * @param null $userId
+	 *
+	 * @return Session[]
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function getSessions($userId = null): array
     {
         $q = Qry::select()
@@ -257,6 +365,12 @@ class UserManager
         return $this->db->getRows($q);
     }
 
+	/**
+	 * @param $userId
+	 *
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function expireSessions($userId){
         $expires = CovleDate::now()->addSeconds(-1)->toSeconds();
 
@@ -267,6 +381,13 @@ class UserManager
 
     }
 
+	/**
+	 * @param string $token
+	 *
+	 * @return bool
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function checkSession(string $token) : bool
     {
         $this->user = $this->getUserBySession($token);
@@ -280,6 +401,14 @@ class UserManager
         return true;
     }
 
+	/**
+	 * @param string $email
+	 * @param string $pass
+	 *
+	 * @return bool
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function login(string $email, string $pass) : bool
     {
         if (!$this->emailExists($email)){
@@ -311,16 +440,30 @@ class UserManager
         return true;
     }
 
+	/**
+	 * @param User $u
+	 *
+	 * @return bool|string
+	 * @throws \Exception
+	 */
     private function createNewSession(User &$u){
-        $session = Session::newSession($u);
+        $session = Session::newSession($u, $this->settings->sessionDaysValid);
 
         $q = Qry::insert(self::TABLE_SESSION, $session);
         return $this->db->insertRow($q);
     }
 
+	/**
+	 * @param User $user
+	 * @param string $newPassword
+	 *
+	 * @return bool
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function savePassword(User &$user, string $newPassword) : bool
     {
-        $user->setPassword($newPassword);
+        $user->setPassword($newPassword, $this->settings->minPasswordStrength);
 
         $q = Qry::update(self::TABLE_USER, [ 'passwordHash' => $user->passwordHash ])
             ->where('id', '=', $user->id);
@@ -328,6 +471,14 @@ class UserManager
         return $this->db->updateRow($q);
     }
 
+	/**
+	 * @param User $user
+	 * @param string $pass
+	 *
+	 * @return bool
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     public function checkPassword(User &$user, string $pass) : bool
     {
         if (strlen($pass) > 72) return false;
@@ -409,18 +560,22 @@ class UserManager
 
     }
 
-    /**
-     * @param $oauthId string The social user id
-     * @param $service string 'google', 'facebook' or 'twitter'
-     * @return User|null
-     */
+	/**
+	 * @param $oauthId
+	 * @param $service
+	 *
+	 * @return mixed|null
+	 * @throws \Exception
+	 * @throws \c00\QueryBuilder\QueryBuilderException
+	 */
     private function getUserBySocialUserId($oauthId, $service)
     {
+    	//todo: Figure out why this is unused?
         $q = Qry::select()
             ->from(self::TABLE_USER)
             ->where("oauthId", '=', $oauthId)
             ->wherE('oauthService', '=', $service)
-            ->asClass(User::class);
+            ->asClass($this->settings->userClass);
 
         if (!$this->db->rowExists($q)) return null;
 
